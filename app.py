@@ -7,10 +7,9 @@ from datetime import datetime
 from flask import Flask, flash, redirect, render_template, request, send_file, url_for
 
 
-if os.getenv("VERCEL"):
-    DB_FILE = "/tmp/hr_payroll_web.db"
-else:
-    DB_FILE = "hr_payroll_web.db"
+DB_FILE = "/tmp/hr_payroll_web.db" if os.getenv("VERCEL") else "hr_payroll_web.db"
+ACTIVE_STATUS_VALUES = ("ACTIVE", "재직", "", None)
+RESIGNED_STATUS_VALUES = ("RESIGNED", "퇴사")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret-key")
@@ -45,6 +44,16 @@ def money(v):
     return f"{float(v):,.0f}"
 
 
+def normalize_status(raw):
+    if str(raw or "").strip().upper() == "RESIGNED" or str(raw or "").strip() == "퇴사":
+        return "RESIGNED"
+    return "ACTIVE"
+
+
+def status_label(raw):
+    return "퇴사" if normalize_status(raw) == "RESIGNED" else "재직"
+
+
 def ensure_column(conn, table, column, col_def):
     cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
     if column in cols:
@@ -52,7 +61,6 @@ def ensure_column(conn, table, column, col_def):
     try:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
     except sqlite3.OperationalError as e:
-        # Concurrent cold starts can race while adding a new column.
         if "duplicate column name" not in str(e).lower():
             raise
 
@@ -116,23 +124,25 @@ def init_db():
 
     ensure_column(conn, "employees", "daily_wage", "REAL DEFAULT 0")
     ensure_column(conn, "employees", "weekly_hours", "REAL DEFAULT 40")
-    ensure_column(conn, "employees", "employment_status", "TEXT DEFAULT '재직'")
+    ensure_column(conn, "employees", "employment_status", "TEXT DEFAULT 'ACTIVE'")
     ensure_column(conn, "employees", "resigned_date", "TEXT")
-
     conn.commit()
     conn.close()
 
 
 def list_employees():
     conn = get_conn()
-    rows = conn.execute(
-        """
-        SELECT * FROM employees
-        ORDER BY CASE employment_status WHEN '재직' THEN 0 ELSE 1 END, id DESC
-        """
-    ).fetchall()
+    rows = conn.execute("SELECT * FROM employees ORDER BY id DESC").fetchall()
     conn.close()
     return rows
+
+
+def list_active_employees():
+    return [r for r in list_employees() if normalize_status(r["employment_status"]) == "ACTIVE"]
+
+
+def list_resigned_employees():
+    return [r for r in list_employees() if normalize_status(r["employment_status"]) == "RESIGNED"]
 
 
 def get_employee(employee_id):
@@ -147,7 +157,7 @@ def list_payroll(month=None):
     if month:
         rows = conn.execute(
             """
-            SELECT p.*, e.name, e.department, e.position, e.emp_type
+            SELECT p.*, e.name, e.department, e.position, e.emp_type, e.employment_status
             FROM payroll p JOIN employees e ON p.employee_id = e.id
             WHERE p.pay_month=?
             ORDER BY p.id DESC
@@ -157,7 +167,7 @@ def list_payroll(month=None):
     else:
         rows = conn.execute(
             """
-            SELECT p.*, e.name, e.department, e.position, e.emp_type
+            SELECT p.*, e.name, e.department, e.position, e.emp_type, e.employment_status
             FROM payroll p JOIN employees e ON p.employee_id = e.id
             ORDER BY p.id DESC
             """
@@ -187,7 +197,6 @@ def list_ledger_rows(pay_month):
             e.employment_status,
             e.resigned_date,
             p.id AS payroll_id,
-            p.pay_month,
             p.base_pay,
             p.overtime_pay,
             p.gross,
@@ -205,43 +214,12 @@ def list_ledger_rows(pay_month):
                 GROUP BY employee_id
             ) m ON p1.id = m.max_id
         ) p ON e.id = p.employee_id
-        ORDER BY CASE e.employment_status WHEN '재직' THEN 0 ELSE 1 END, e.id DESC
+        ORDER BY e.id DESC
         """,
         (pay_month,),
     ).fetchall()
     conn.close()
     return rows
-
-
-def get_payroll_by_id(payroll_id):
-    conn = get_conn()
-    row = conn.execute(
-        """
-        SELECT p.*, e.name, e.department, e.position, e.emp_type
-        FROM payroll p JOIN employees e ON p.employee_id=e.id
-        WHERE p.id=?
-        """,
-        (payroll_id,),
-    ).fetchone()
-    conn.close()
-    return row
-
-
-def get_latest_payroll_by_employee_month(employee_id, pay_month):
-    conn = get_conn()
-    row = conn.execute(
-        """
-        SELECT p.*, e.name, e.department, e.position, e.emp_type
-        FROM payroll p
-        JOIN employees e ON p.employee_id=e.id
-        WHERE p.employee_id=? AND p.pay_month=?
-        ORDER BY p.id DESC
-        LIMIT 1
-        """,
-        (employee_id, pay_month),
-    ).fetchone()
-    conn.close()
-    return row
 
 
 def leave_summary():
@@ -255,7 +233,7 @@ def leave_summary():
         FROM employees e
         LEFT JOIN leave_usage l ON e.id = l.employee_id
         GROUP BY e.id, e.name, e.department, e.position, e.leave_grant, e.employment_status
-        ORDER BY CASE e.employment_status WHEN '재직' THEN 0 ELSE 1 END, e.id DESC
+        ORDER BY e.id DESC
         """
     ).fetchall()
     conn.close()
@@ -298,7 +276,6 @@ def calculate(employee, form):
     lit = it * 0.1
     total_deduct = np + hi + ei + it + lit + other
     net = gross - total_deduct
-
     return {
         "base_pay": base_pay,
         "overtime_pay": overtime_pay,
@@ -313,8 +290,38 @@ def calculate(employee, form):
         "total_deduct": total_deduct,
         "gross": gross,
         "net": net,
-        "effective_hourly": effective_hourly,
     }
+
+
+def get_payroll_by_id(payroll_id):
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT p.*, e.name, e.department, e.position, e.emp_type
+        FROM payroll p JOIN employees e ON p.employee_id=e.id
+        WHERE p.id=?
+        """,
+        (payroll_id,),
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def get_latest_payroll_by_employee_month(employee_id, pay_month):
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT p.*, e.name, e.department, e.position, e.emp_type
+        FROM payroll p
+        JOIN employees e ON p.employee_id=e.id
+        WHERE p.employee_id=? AND p.pay_month=?
+        ORDER BY p.id DESC
+        LIMIT 1
+        """,
+        (employee_id, pay_month),
+    ).fetchone()
+    conn.close()
+    return row
 
 
 def build_payslip_text(row):
@@ -358,6 +365,8 @@ def inject_helpers():
         "money": money,
         "today_month": today_month(),
         "today_date": today_date(),
+        "status_label": status_label,
+        "normalize_status": normalize_status,
     }
 
 
@@ -366,39 +375,44 @@ def _before_request():
     init_db()
 
 
+def dashboard_context(tab, month, payslip_id="", payslip_employee_id="", payslip_month="", payroll_preview=None, payroll_form=None):
+    all_employees = list_employees()
+    payslip_row = None
+    if str(payslip_id).isdigit():
+        payslip_row = get_payroll_by_id(int(payslip_id))
+    elif str(payslip_employee_id).isdigit() and payslip_month:
+        payslip_row = get_latest_payroll_by_employee_month(int(payslip_employee_id), payslip_month)
+    return {
+        "active_tab": tab,
+        "employees": all_employees,
+        "active_employees": list_active_employees(),
+        "resigned_employees": list_resigned_employees(),
+        "payroll_rows": list_payroll(month),
+        "ledger_rows": list_ledger_rows(month),
+        "leave_rows": leave_summary(),
+        "month_filter": month,
+        "pay_months": list_pay_months(),
+        "payslip_id": payslip_id,
+        "payslip_employee_id": payslip_employee_id,
+        "payslip_month": payslip_month or month,
+        "payslip_text": build_payslip_text(payslip_row),
+        "payroll_preview": payroll_preview,
+        "payroll_form": payroll_form or {},
+    }
+
+
 @app.get("/")
 def dashboard():
-    init_db()
     tab = request.args.get("tab", "employees")
     month = request.args.get("month", "").strip() or today_month()
-
-    payslip_id = request.args.get("payslip_id", "").strip()
-    payslip_employee_id = request.args.get("payslip_employee_id", "").strip()
-    payslip_month = request.args.get("payslip_month", "").strip() or month
-
-    payslip_row = None
-    if payslip_id.isdigit():
-        payslip_row = get_payroll_by_id(int(payslip_id))
-    elif payslip_employee_id.isdigit() and payslip_month:
-        payslip_row = get_latest_payroll_by_employee_month(int(payslip_employee_id), payslip_month)
-
-    employees = list_employees()
-    return render_template(
-        "dashboard.html",
-        active_tab=tab,
-        employees=employees,
-        payroll_rows=list_payroll(month),
-        ledger_rows=list_ledger_rows(month),
-        leave_rows=leave_summary(),
-        month_filter=month,
-        pay_months=list_pay_months(),
-        payslip_id=payslip_id,
-        payslip_employee_id=payslip_employee_id,
-        payslip_month=payslip_month,
-        payslip_text=build_payslip_text(payslip_row),
-        payroll_preview=None,
-        payroll_form={},
+    ctx = dashboard_context(
+        tab=tab,
+        month=month,
+        payslip_id=request.args.get("payslip_id", "").strip(),
+        payslip_employee_id=request.args.get("payslip_employee_id", "").strip(),
+        payslip_month=request.args.get("payslip_month", "").strip() or month,
     )
+    return render_template("dashboard.html", **ctx)
 
 
 @app.post("/employee/add")
@@ -407,7 +421,6 @@ def employee_add():
     if not name:
         flash("성명을 입력해주세요.", "error")
         return redirect(url_for("dashboard", tab="employees"))
-
     conn = get_conn()
     conn.execute(
         """
@@ -426,7 +439,7 @@ def employee_add():
             to_num(request.form.get("monthly"), 0),
             request.form.get("start_date", "").strip(),
             to_num(request.form.get("leave_grant"), 15),
-            "재직",
+            "ACTIVE",
             "",
             now_text(),
         ),
@@ -472,22 +485,22 @@ def employee_update():
 
 @app.post("/employee/update-inline")
 def employee_update_inline():
+    source_tab = request.form.get("source_tab", "employees")
     selected_ids = [x for x in request.form.getlist("selected_ids") if x.isdigit()]
     if not selected_ids:
         flash("수정할 행을 체크해주세요.", "error")
-        return redirect(url_for("dashboard", tab="employees"))
-
+        return redirect(url_for("dashboard", tab=source_tab))
     conn = get_conn()
     for sid in selected_ids:
-        emp_id = int(sid)
         name = request.form.get(f"name_{sid}", "").strip()
         if not name:
             continue
-        status = request.form.get(f"employment_status_{sid}", "재직").strip()
+        status = normalize_status(request.form.get(f"employment_status_{sid}", "ACTIVE"))
         resigned_date = request.form.get(f"resigned_date_{sid}", "").strip()
-        if status == "재직":
+        if status == "ACTIVE":
             resigned_date = ""
-
+        elif not resigned_date:
+            resigned_date = today_date()
         conn.execute(
             """
             UPDATE employees
@@ -508,48 +521,13 @@ def employee_update_inline():
                 to_num(request.form.get(f"leave_grant_{sid}"), 15),
                 status,
                 resigned_date,
-                emp_id,
+                int(sid),
             ),
         )
     conn.commit()
     conn.close()
-    flash("체크한 근로자 정보를 목록에서 바로 수정했습니다.", "ok")
-    return redirect(url_for("dashboard", tab="employees"))
-
-
-@app.post("/employee/retire")
-def employee_retire():
-    employee_id = request.form.get("employee_id", "").strip()
-    resigned_date = request.form.get("resigned_date", "").strip() or today_date()
-    if not employee_id.isdigit():
-        flash("퇴사 처리할 근로자 ID를 입력해주세요.", "error")
-        return redirect(url_for("dashboard", tab="employees"))
-    conn = get_conn()
-    conn.execute(
-        "UPDATE employees SET employment_status='퇴사', resigned_date=? WHERE id=?",
-        (resigned_date, int(employee_id)),
-    )
-    conn.commit()
-    conn.close()
-    flash("퇴사 처리했습니다.", "ok")
-    return redirect(url_for("dashboard", tab="employees"))
-
-
-@app.post("/employee/reactivate")
-def employee_reactivate():
-    employee_id = request.form.get("employee_id", "").strip()
-    if not employee_id.isdigit():
-        flash("재직 전환할 근로자 ID를 입력해주세요.", "error")
-        return redirect(url_for("dashboard", tab="employees"))
-    conn = get_conn()
-    conn.execute(
-        "UPDATE employees SET employment_status='재직', resigned_date='' WHERE id=?",
-        (int(employee_id),),
-    )
-    conn.commit()
-    conn.close()
-    flash("재직 상태로 변경했습니다.", "ok")
-    return redirect(url_for("dashboard", tab="employees"))
+    flash("체크한 행을 저장했습니다.", "ok")
+    return redirect(url_for("dashboard", tab=source_tab))
 
 
 @app.post("/employee/delete")
@@ -569,94 +547,66 @@ def employee_delete():
     return redirect(url_for("dashboard", tab="employees"))
 
 
-def build_dashboard_context_for_payroll(form, preview):
-    month = form.get("pay_month", today_month()).strip() or today_month()
-    employees = list_employees()
-    return {
-        "active_tab": "payroll",
-        "employees": employees,
-        "payroll_rows": list_payroll(month),
-        "ledger_rows": list_ledger_rows(month),
-        "leave_rows": leave_summary(),
-        "month_filter": month,
-        "pay_months": list_pay_months(),
-        "payslip_id": "",
-        "payslip_employee_id": "",
-        "payslip_month": month,
-        "payslip_text": "",
-        "payroll_preview": preview,
-        "payroll_form": dict(form),
-    }
-
-
 @app.post("/payroll/calculate")
 def payroll_calculate():
-    try:
-        employee_id = request.form.get("employee_id", "").strip()
-        if not employee_id.isdigit():
-            flash("근로자를 선택해주세요.", "error")
-            return redirect(url_for("dashboard", tab="payroll"))
-        employee = get_employee(int(employee_id))
-        if not employee:
-            flash("근로자를 찾을 수 없습니다.", "error")
-            return redirect(url_for("dashboard", tab="payroll"))
-        preview = calculate(employee, request.form)
-        return render_template("dashboard.html", **build_dashboard_context_for_payroll(request.form, preview))
-    except Exception as e:
-        flash(f"급여 계산 중 오류가 발생했습니다: {e}", "error")
+    employee_id = request.form.get("employee_id", "").strip()
+    if not employee_id.isdigit():
+        flash("근로자를 선택해주세요.", "error")
         return redirect(url_for("dashboard", tab="payroll"))
+    employee = get_employee(int(employee_id))
+    if not employee:
+        flash("근로자를 찾을 수 없습니다.", "error")
+        return redirect(url_for("dashboard", tab="payroll"))
+    month = request.form.get("pay_month", "").strip() or today_month()
+    preview = calculate(employee, request.form)
+    ctx = dashboard_context("payroll", month, payroll_preview=preview, payroll_form=dict(request.form))
+    return render_template("dashboard.html", **ctx)
 
 
 @app.post("/payroll/save")
 def payroll_save():
-    try:
-        employee_id = request.form.get("employee_id", "").strip()
-        pay_month = request.form.get("pay_month", "").strip()
-        if not employee_id.isdigit() or not pay_month:
-            flash("근로자와 급여월을 확인해주세요.", "error")
-            return redirect(url_for("dashboard", tab="payroll"))
-        employee = get_employee(int(employee_id))
-        if not employee:
-            flash("근로자를 찾을 수 없습니다.", "error")
-            return redirect(url_for("dashboard", tab="payroll"))
-        calc = calculate(employee, request.form)
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO payroll(employee_id, pay_month, base_pay, overtime_pay, bonus, allowances,
-                                np, hi, ei, it, lit, other_deduct, total_deduct, gross, net, created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                int(employee_id),
-                pay_month,
-                calc["base_pay"],
-                calc["overtime_pay"],
-                calc["bonus"],
-                calc["allowances"],
-                calc["np"],
-                calc["hi"],
-                calc["ei"],
-                calc["it"],
-                calc["lit"],
-                calc["other_deduct"],
-                calc["total_deduct"],
-                calc["gross"],
-                calc["net"],
-                now_text(),
-            ),
-        )
-        conn.commit()
-        payroll_id = cur.lastrowid
-        conn.close()
-
-        flash(f"급여 데이터를 저장했습니다. ID: {payroll_id}", "ok")
-        return redirect(url_for("dashboard", tab="ledger", month=pay_month, payslip_id=payroll_id))
-    except Exception as e:
-        flash(f"급여 저장 중 오류가 발생했습니다: {e}", "error")
+    employee_id = request.form.get("employee_id", "").strip()
+    pay_month = request.form.get("pay_month", "").strip()
+    if not employee_id.isdigit() or not pay_month:
+        flash("근로자와 급여월을 확인해주세요.", "error")
         return redirect(url_for("dashboard", tab="payroll"))
+    employee = get_employee(int(employee_id))
+    if not employee:
+        flash("근로자를 찾을 수 없습니다.", "error")
+        return redirect(url_for("dashboard", tab="payroll"))
+    calc = calculate(employee, request.form)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO payroll(employee_id, pay_month, base_pay, overtime_pay, bonus, allowances,
+                            np, hi, ei, it, lit, other_deduct, total_deduct, gross, net, created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            int(employee_id),
+            pay_month,
+            calc["base_pay"],
+            calc["overtime_pay"],
+            calc["bonus"],
+            calc["allowances"],
+            calc["np"],
+            calc["hi"],
+            calc["ei"],
+            calc["it"],
+            calc["lit"],
+            calc["other_deduct"],
+            calc["total_deduct"],
+            calc["gross"],
+            calc["net"],
+            now_text(),
+        ),
+    )
+    conn.commit()
+    payroll_id = cur.lastrowid
+    conn.close()
+    flash(f"급여 데이터를 저장했습니다. ID: {payroll_id}", "ok")
+    return redirect(url_for("dashboard", tab="ledger", month=pay_month, payslip_id=payroll_id))
 
 
 @app.get("/ledger/export")
@@ -665,15 +615,13 @@ def ledger_export():
     rows = list_ledger_rows(month)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(
-        ["직원ID", "성명", "상태", "급여월", "기본급", "연장수당", "총지급", "총공제", "실지급", "작성상태", "등록시각"]
-    )
+    writer.writerow(["직원ID", "성명", "상태", "급여월", "기본급", "연장수당", "총지급", "총공제", "실지급", "작성상태", "등록시각"])
     for r in rows:
         writer.writerow(
             [
                 r["employee_id"],
                 r["name"],
-                r["employment_status"],
+                status_label(r["employment_status"]),
                 month,
                 r["base_pay"] or 0,
                 r["overtime_pay"] or 0,
@@ -685,8 +633,7 @@ def ledger_export():
             ]
         )
     mem = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-    filename = f"ledger_{month}.csv"
-    return send_file(mem, as_attachment=True, download_name=filename, mimetype="text/csv")
+    return send_file(mem, as_attachment=True, download_name=f"ledger_{month}.csv", mimetype="text/csv")
 
 
 @app.post("/leave/add")
@@ -716,13 +663,10 @@ def leave_add():
 def leave_update_grant():
     employee_id = request.form.get("employee_id", "").strip()
     if not employee_id.isdigit():
-        flash("연차 부여일수 수정 대상 근로자를 선택해주세요.", "error")
+        flash("연차 부여일수 수정 대상을 선택해주세요.", "error")
         return redirect(url_for("dashboard", tab="leave"))
     conn = get_conn()
-    conn.execute(
-        "UPDATE employees SET leave_grant=? WHERE id=?",
-        (to_num(request.form.get("leave_grant"), 15), int(employee_id)),
-    )
+    conn.execute("UPDATE employees SET leave_grant=? WHERE id=?", (to_num(request.form.get("leave_grant"), 15), int(employee_id)))
     conn.commit()
     conn.close()
     flash("연차 부여일수를 수정했습니다.", "ok")
