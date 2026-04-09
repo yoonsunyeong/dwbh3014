@@ -47,8 +47,14 @@ def money(v):
 
 def ensure_column(conn, table, column, col_def):
     cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
-    if column not in cols:
+    if column in cols:
+        return
+    try:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+    except sqlite3.OperationalError as e:
+        # Concurrent cold starts can race while adding a new column.
+        if "duplicate column name" not in str(e).lower():
+            raise
 
 
 def init_db():
@@ -354,6 +360,11 @@ def inject_helpers():
     }
 
 
+@app.before_request
+def _before_request():
+    init_db()
+
+
 @app.get("/")
 def dashboard():
     init_db()
@@ -530,64 +541,72 @@ def build_dashboard_context_for_payroll(form, preview):
 
 @app.post("/payroll/calculate")
 def payroll_calculate():
-    employee_id = request.form.get("employee_id", "").strip()
-    if not employee_id.isdigit():
-        flash("근로자를 선택해주세요.", "error")
+    try:
+        employee_id = request.form.get("employee_id", "").strip()
+        if not employee_id.isdigit():
+            flash("근로자를 선택해주세요.", "error")
+            return redirect(url_for("dashboard", tab="payroll"))
+        employee = get_employee(int(employee_id))
+        if not employee:
+            flash("근로자를 찾을 수 없습니다.", "error")
+            return redirect(url_for("dashboard", tab="payroll"))
+        preview = calculate(employee, request.form)
+        return render_template("dashboard.html", **build_dashboard_context_for_payroll(request.form, preview))
+    except Exception as e:
+        flash(f"급여 계산 중 오류가 발생했습니다: {e}", "error")
         return redirect(url_for("dashboard", tab="payroll"))
-    employee = get_employee(int(employee_id))
-    if not employee:
-        flash("근로자를 찾을 수 없습니다.", "error")
-        return redirect(url_for("dashboard", tab="payroll"))
-    preview = calculate(employee, request.form)
-    return render_template("dashboard.html", **build_dashboard_context_for_payroll(request.form, preview))
 
 
 @app.post("/payroll/save")
 def payroll_save():
-    employee_id = request.form.get("employee_id", "").strip()
-    pay_month = request.form.get("pay_month", "").strip()
-    if not employee_id.isdigit() or not pay_month:
-        flash("근로자와 급여월을 확인해주세요.", "error")
-        return redirect(url_for("dashboard", tab="payroll"))
-    employee = get_employee(int(employee_id))
-    if not employee:
-        flash("근로자를 찾을 수 없습니다.", "error")
-        return redirect(url_for("dashboard", tab="payroll"))
-    calc = calculate(employee, request.form)
+    try:
+        employee_id = request.form.get("employee_id", "").strip()
+        pay_month = request.form.get("pay_month", "").strip()
+        if not employee_id.isdigit() or not pay_month:
+            flash("근로자와 급여월을 확인해주세요.", "error")
+            return redirect(url_for("dashboard", tab="payroll"))
+        employee = get_employee(int(employee_id))
+        if not employee:
+            flash("근로자를 찾을 수 없습니다.", "error")
+            return redirect(url_for("dashboard", tab="payroll"))
+        calc = calculate(employee, request.form)
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO payroll(employee_id, pay_month, base_pay, overtime_pay, bonus, allowances,
-                            np, hi, ei, it, lit, other_deduct, total_deduct, gross, net, created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            int(employee_id),
-            pay_month,
-            calc["base_pay"],
-            calc["overtime_pay"],
-            calc["bonus"],
-            calc["allowances"],
-            calc["np"],
-            calc["hi"],
-            calc["ei"],
-            calc["it"],
-            calc["lit"],
-            calc["other_deduct"],
-            calc["total_deduct"],
-            calc["gross"],
-            calc["net"],
-            now_text(),
-        ),
-    )
-    conn.commit()
-    payroll_id = cur.lastrowid
-    conn.close()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO payroll(employee_id, pay_month, base_pay, overtime_pay, bonus, allowances,
+                                np, hi, ei, it, lit, other_deduct, total_deduct, gross, net, created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                int(employee_id),
+                pay_month,
+                calc["base_pay"],
+                calc["overtime_pay"],
+                calc["bonus"],
+                calc["allowances"],
+                calc["np"],
+                calc["hi"],
+                calc["ei"],
+                calc["it"],
+                calc["lit"],
+                calc["other_deduct"],
+                calc["total_deduct"],
+                calc["gross"],
+                calc["net"],
+                now_text(),
+            ),
+        )
+        conn.commit()
+        payroll_id = cur.lastrowid
+        conn.close()
 
-    flash(f"급여 데이터를 저장했습니다. ID: {payroll_id}", "ok")
-    return redirect(url_for("dashboard", tab="ledger", month=pay_month, payslip_id=payroll_id))
+        flash(f"급여 데이터를 저장했습니다. ID: {payroll_id}", "ok")
+        return redirect(url_for("dashboard", tab="ledger", month=pay_month, payslip_id=payroll_id))
+    except Exception as e:
+        flash(f"급여 저장 중 오류가 발생했습니다: {e}", "error")
+        return redirect(url_for("dashboard", tab="payroll"))
 
 
 @app.get("/ledger/export")
