@@ -467,6 +467,52 @@ def employee_update():
     return redirect(url_for("dashboard", tab="employees"))
 
 
+@app.post("/employee/update-inline")
+def employee_update_inline():
+    selected_ids = [x for x in request.form.getlist("selected_ids") if x.isdigit()]
+    if not selected_ids:
+        flash("수정할 행을 체크해주세요.", "error")
+        return redirect(url_for("dashboard", tab="employees"))
+
+    conn = get_conn()
+    for sid in selected_ids:
+        emp_id = int(sid)
+        name = request.form.get(f"name_{sid}", "").strip()
+        if not name:
+            continue
+        status = request.form.get(f"employment_status_{sid}", "재직").strip()
+        resigned_date = request.form.get(f"resigned_date_{sid}", "").strip()
+        if status == "재직":
+            resigned_date = ""
+
+        conn.execute(
+            """
+            UPDATE employees
+            SET name=?, department=?, position=?, emp_type=?, hourly=?, daily_wage=?, monthly=?,
+                start_date=?, leave_grant=?, employment_status=?, resigned_date=?
+            WHERE id=?
+            """,
+            (
+                name,
+                request.form.get(f"department_{sid}", "").strip(),
+                request.form.get(f"position_{sid}", "").strip(),
+                request.form.get(f"emp_type_{sid}", "월급제").strip(),
+                to_num(request.form.get(f"hourly_{sid}"), 0),
+                to_num(request.form.get(f"daily_wage_{sid}"), 0),
+                to_num(request.form.get(f"monthly_{sid}"), 0),
+                request.form.get(f"start_date_{sid}", "").strip(),
+                to_num(request.form.get(f"leave_grant_{sid}"), 15),
+                status,
+                resigned_date,
+                emp_id,
+            ),
+        )
+    conn.commit()
+    conn.close()
+    flash("체크한 근로자 정보를 목록에서 바로 수정했습니다.", "ok")
+    return redirect(url_for("dashboard", tab="employees"))
+
+
 @app.post("/employee/retire")
 def employee_retire():
     employee_id = request.form.get("employee_id", "").strip()

@@ -94,28 +94,45 @@
 
       <div class="card">
         <h3>근로자 목록</h3>
-        <table>
-          <tr>
-            <th>ID</th><th>성명</th><th>부서</th><th>직급</th><th>상태</th><th>퇴사일</th>
-            <th>고용형태</th><th>시급</th><th>일급</th><th>월급</th><th>입사일</th><th>연차부여</th>
-          </tr>
-          {% for e in employees %}
+        <form method="post" action="/employee/update-inline">
+          <table>
             <tr>
-              <td>{{ e.id }}</td>
-              <td>{{ e.name }}</td>
-              <td>{{ e.department or '' }}</td>
-              <td>{{ e.position or '' }}</td>
-              <td class="{{ 'status-active' if e.employment_status == '재직' else 'status-resigned' }}">{{ e.employment_status or '재직' }}</td>
-              <td>{{ e.resigned_date or '' }}</td>
-              <td>{{ e.emp_type }}</td>
-              <td>{{ money(e.hourly) }}</td>
-              <td>{{ money(e.daily_wage) }}</td>
-              <td>{{ money(e.monthly) }}</td>
-              <td>{{ e.start_date or '' }}</td>
-              <td>{{ '%.1f'|format(e.leave_grant) }}</td>
+              <th>선택</th><th>ID</th><th>성명</th><th>부서</th><th>직급</th><th>상태</th><th>퇴사일</th>
+              <th>고용형태</th><th>시급</th><th>일급</th><th>월급</th><th>입사일</th><th>연차부여</th>
             </tr>
-          {% endfor %}
-        </table>
+            {% for e in employees %}
+              <tr>
+                <td><input type="checkbox" name="selected_ids" value="{{ e.id }}" /></td>
+                <td>{{ e.id }}</td>
+                <td><input name="name_{{ e.id }}" value="{{ e.name }}" /></td>
+                <td><input name="department_{{ e.id }}" value="{{ e.department or '' }}" /></td>
+                <td><input name="position_{{ e.id }}" value="{{ e.position or '' }}" /></td>
+                <td>
+                  <select name="employment_status_{{ e.id }}">
+                    <option value="재직" {% if (e.employment_status or '재직') == '재직' %}selected{% endif %}>재직</option>
+                    <option value="퇴사" {% if (e.employment_status or '') == '퇴사' %}selected{% endif %}>퇴사</option>
+                  </select>
+                </td>
+                <td><input name="resigned_date_{{ e.id }}" value="{{ e.resigned_date or '' }}" placeholder="YYYY-MM-DD" /></td>
+                <td>
+                  <select name="emp_type_{{ e.id }}">
+                    <option value="월급제" {% if e.emp_type == '월급제' %}selected{% endif %}>월급제</option>
+                    <option value="시급제" {% if e.emp_type == '시급제' %}selected{% endif %}>시급제</option>
+                    <option value="일급제" {% if e.emp_type == '일급제' %}selected{% endif %}>일급제</option>
+                  </select>
+                </td>
+                <td><input name="hourly_{{ e.id }}" value="{{ e.hourly or 0 }}" /></td>
+                <td><input name="daily_wage_{{ e.id }}" value="{{ e.daily_wage or 0 }}" /></td>
+                <td><input name="monthly_{{ e.id }}" value="{{ e.monthly or 0 }}" /></td>
+                <td><input name="start_date_{{ e.id }}" value="{{ e.start_date or '' }}" placeholder="YYYY-MM-DD" /></td>
+                <td><input name="leave_grant_{{ e.id }}" value="{{ e.leave_grant or 15 }}" /></td>
+              </tr>
+            {% endfor %}
+          </table>
+          <div class="row">
+            <button>체크한 행 바로 수정 저장</button>
+          </div>
+        </form>
       </div>
     {% endif %}
 
