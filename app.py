@@ -1,15 +1,19 @@
 import csv
 import io
+import os
 import sqlite3
 from datetime import datetime
 
 from flask import Flask, flash, redirect, render_template, request, send_file, url_for
 
 
-DB_FILE = "hr_payroll_web.db"
+if os.getenv("VERCEL"):
+    DB_FILE = "/tmp/hr_payroll_web.db"
+else:
+    DB_FILE = "hr_payroll_web.db"
 
 app = Flask(__name__)
-app.secret_key = "change-this-secret-key"
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret-key")
 
 
 def get_conn():
@@ -483,6 +487,8 @@ def leave_update_grant():
     return redirect(url_for("dashboard", tab="leave"))
 
 
+init_db()
+
+
 if __name__ == "__main__":
-    init_db()
     app.run(debug=True)
