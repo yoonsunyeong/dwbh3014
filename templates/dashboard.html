@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>사업장 인사/급여 통합 관리 (웹)</title>
+  <style>
+    :root { --bg:#f4f7fb; --card:#fff; --line:#d6dee8; --text:#1b2733; --accent:#1f6feb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1320px; margin: 20px auto; padding: 0 14px; }
+    h1 { margin: 0 0 12px; }
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .tabs a { text-decoration: none; color: var(--text); border: 1px solid var(--line); background: #eaf1fb; padding: 10px 14px; border-radius: 10px; font-weight: 700; }
+    .tabs a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px; overflow-x: auto; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
+    label { font-size: 13px; color: #4d5b6a; display: block; margin-bottom: 5px; }
+    input, select, textarea { width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    textarea { min-height: 250px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    button, .btn { border: 0; background: var(--accent); color: #fff; padding: 9px 12px; border-radius: 8px; font-weight: 700; cursor: pointer; text-decoration: none; }
+    .btn.gray, button.gray { background: #627286; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 980px; }
+    th, td { border: 1px solid var(--line); padding: 8px; text-align: center; }
+    th { background: #f0f5fb; }
+    .flash { padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; font-weight: 600; }
+    .flash.ok { background: #e8f7ed; border: 1px solid #87d29b; color: #196835; }
+    .flash.error { background: #fdecec; border: 1px solid #efb0b0; color: #8f2020; }
+    pre { background: #0f1720; color: #dbe8f6; padding: 12px; border-radius: 10px; white-space: pre-wrap; }
+    @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>사업장 인사/급여 통합 관리 (웹)</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, msg in messages %}
+          <div class="flash {{ category }}">{{ msg }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="tabs">
+      <a class="{{ 'active' if active_tab == 'employees' else '' }}" href="/?tab=employees">근로자 관리</a>
+      <a class="{{ 'active' if active_tab == 'payroll' else '' }}" href="/?tab=payroll">급여 계산/등록</a>
+      <a class="{{ 'active' if active_tab == 'ledger' else '' }}" href="/?tab=ledger">임금대장</a>
+      <a class="{{ 'active' if active_tab == 'payslip' else '' }}" href="/?tab=payslip">임금명세서</a>
+      <a class="{{ 'active' if active_tab == 'leave' else '' }}" href="/?tab=leave">연차관리</a>
+    </div>
+
+    {% if active_tab == 'employees' %}
+      <div class="card">
+        <h3>근로자 등록/수정/삭제</h3>
+        <form method="post">
+          <div class="grid">
+            <div><label>근로자 ID (수정/삭제 시)</label><input name="employee_id" placeholder="예: 1" /></div>
+            <div><label>성명</label><input name="name" required /></div>
+            <div><label>부서</label><input name="department" /></div>
+            <div><label>직급</label><input name="position" /></div>
+            <div><label>고용형태</label><select name="emp_type"><option>월급제</option><option>시급제</option></select></div>
+            <div><label>시급</label><input name="hourly" value="0" /></div>
+            <div><label>월급</label><input name="monthly" value="0" /></div>
+            <div><label>입사일</label><input name="start_date" placeholder="YYYY-MM-DD" /></div>
+            <div><label>연차부여일수</label><input name="leave_grant" value="15" /></div>
+          </div>
+          <div class="row">
+            <button formaction="/employee/add">신규 등록</button>
+            <button class="gray" formaction="/employee/update">선택 수정</button>
+            <button class="gray" formaction="/employee/delete">선택 삭제</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>근로자 목록</h3>
+        <table>
+          <tr><th>ID</th><th>성명</th><th>부서</th><th>직급</th><th>고용형태</th><th>시급</th><th>월급</th><th>입사일</th><th>연차부여</th></tr>
+          {% for e in employees %}
+            <tr>
+              <td>{{ e.id }}</td><td>{{ e.name }}</td><td>{{ e.department or '' }}</td><td>{{ e.position or '' }}</td><td>{{ e.emp_type }}</td>
+              <td>{{ money(e.hourly) }}</td><td>{{ money(e.monthly) }}</td><td>{{ e.start_date or '' }}</td><td>{{ '%.1f'|format(e.leave_grant) }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    {% endif %}
+
+    {% if active_tab == 'payroll' %}
+      <div class="card">
+        <h3>급여 계산/등록</h3>
+        <form method="post">
+          <div class="grid">
+            <div>
+              <label>근로자</label>
+              <select name="employee_id" required>
+                <option value="">선택</option>
+                {% for e in employees %}
+                  <option value="{{ e.id }}" {% if payroll_form.get('employee_id') == (e.id|string) %}selected{% endif %}>{{ e.id }} | {{ e.name }} ({{ e.department or '-' }}/{{ e.position or '-' }})</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div><label>급여월</label><input name="pay_month" value="{{ payroll_form.get('pay_month', today_month) }}" /></div>
+            <div><label>소정근로시간</label><input name="hours" value="{{ payroll_form.get('hours', '209') }}" /></div>
+            <div><label>연장근로시간</label><input name="ot_hours" value="{{ payroll_form.get('ot_hours', '0') }}" /></div>
+            <div><label>연장배수</label><input name="ot_mul" value="{{ payroll_form.get('ot_mul', '1.5') }}" /></div>
+            <div><label>상여</label><input name="bonus" value="{{ payroll_form.get('bonus', '0') }}" /></div>
+            <div><label>수당</label><input name="allowances" value="{{ payroll_form.get('allowances', '0') }}" /></div>
+            <div><label>기타공제</label><input name="other_deduct" value="{{ payroll_form.get('other_deduct', '0') }}" /></div>
+          </div>
+          <div class="row">
+            <button formaction="/payroll/calculate">급여 계산</button>
+            <button class="gray" formaction="/payroll/save">계산 후 저장</button>
+          </div>
+        </form>
+      </div>
+
+      {% if payroll_preview %}
+      <div class="card">
+        <h3>계산 결과</h3>
+        <pre>기본급: {{ money(payroll_preview.base_pay) }}
+연장수당: {{ money(payroll_preview.overtime_pay) }}
+상여: {{ money(payroll_preview.bonus) }}
+수당: {{ money(payroll_preview.allowances) }}
+총지급: {{ money(payroll_preview.gross) }}
+
+국민연금: {{ money(payroll_preview.np) }}
+건강보험: {{ money(payroll_preview.hi) }}
+고용보험: {{ money(payroll_preview.ei) }}
+소득세: {{ money(payroll_preview.it) }}
+지방소득세: {{ money(payroll_preview.lit) }}
+기타공제: {{ money(payroll_preview.other_deduct) }}
+총공제: {{ money(payroll_preview.total_deduct) }}
+
+실지급: {{ money(payroll_preview.net) }}</pre>
+      </div>
+      {% endif %}
+    {% endif %}
+
+    {% if active_tab == 'ledger' %}
+      <div class="card">
+        <h3>임금대장</h3>
+        <form method="get" class="row">
+          <input type="hidden" name="tab" value="ledger" />
+          <input name="month" placeholder="YYYY-MM (빈칸=전체)" value="{{ month_filter }}" style="max-width:220px;" />
+          <button>조회</button>
+          <a class="btn gray" href="/ledger/export?month={{ month_filter }}">CSV 내보내기</a>
+        </form>
+      </div>
+      <div class="card">
+        <table>
+          <tr><th>ID</th><th>급여월</th><th>성명</th><th>부서</th><th>직급</th><th>총지급</th><th>총공제</th><th>실지급</th><th>등록시각</th></tr>
+          {% for r in payroll_rows %}
+            <tr>
+              <td>{{ r.id }}</td><td>{{ r.pay_month }}</td><td>{{ r.name }}</td><td>{{ r.department or '' }}</td><td>{{ r.position or '' }}</td>
+              <td>{{ money(r.gross) }}</td><td>{{ money(r.total_deduct) }}</td><td>{{ money(r.net) }}</td><td>{{ r.created_at }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    {% endif %}
+
+    {% if active_tab == 'payslip' %}
+      <div class="card">
+        <h3>임금명세서</h3>
+        <form method="get" class="row">
+          <input type="hidden" name="tab" value="payslip" />
+          <input name="payslip_id" placeholder="임금대장 ID" value="{{ payslip_id }}" style="max-width:220px;" />
+          <button>불러오기</button>
+        </form>
+      </div>
+      <div class="card">
+        <textarea readonly>{{ payslip_text }}</textarea>
+      </div>
+    {% endif %}
+
+    {% if active_tab == 'leave' %}
+      <div class="card">
+        <h3>연차 사용 등록</h3>
+        <form method="post" action="/leave/add">
+          <div class="grid">
+            <div>
+              <label>근로자</label>
+              <select name="employee_id" required>
+                <option value="">선택</option>
+                {% for e in employees %}
+                  <option value="{{ e.id }}">{{ e.id }} | {{ e.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div><label>사용일자</label><input name="leave_date" value="{{ today_date }}" /></div>
+            <div><label>일수</label><input name="days" value="1" /></div>
+            <div><label>사유</label><input name="note" /></div>
+          </div>
+          <div class="row"><button>등록</button></div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>연차 부여일수 수정</h3>
+        <form method="post" action="/leave/update-grant">
+          <div class="row">
+            <select name="employee_id" required style="max-width:280px;">
+              <option value="">근로자 선택</option>
+              {% for e in employees %}
+                <option value="{{ e.id }}">{{ e.id }} | {{ e.name }}</option>
+              {% endfor %}
+            </select>
+            <input name="leave_grant" value="15" style="max-width:180px;" />
+            <button class="gray">업데이트</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>연차 잔여 현황</h3>
+        <table>
+          <tr><th>ID</th><th>성명</th><th>부서</th><th>직급</th><th>부여일수</th><th>사용일수</th><th>잔여일수</th></tr>
+          {% for r in leave_rows %}
+            <tr>
+              <td>{{ r.id }}</td><td>{{ r.name }}</td><td>{{ r.department or '' }}</td><td>{{ r.position or '' }}</td>
+              <td>{{ '%.1f'|format(r.leave_grant) }}</td><td>{{ '%.1f'|format(r.used_days) }}</td><td>{{ '%.1f'|format(r.remain_days) }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</body>
+</html>
