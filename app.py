@@ -115,6 +115,7 @@ def init_db():
     )
 
     ensure_column(conn, "employees", "daily_wage", "REAL DEFAULT 0")
+    ensure_column(conn, "employees", "weekly_hours", "REAL DEFAULT 40")
     ensure_column(conn, "employees", "employment_status", "TEXT DEFAULT '재직'")
     ensure_column(conn, "employees", "resigned_date", "TEXT")
 
@@ -411,8 +412,8 @@ def employee_add():
     conn.execute(
         """
         INSERT INTO employees
-        (name, department, position, emp_type, hourly, daily_wage, monthly, start_date, leave_grant, employment_status, resigned_date, created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        (name, department, position, emp_type, hourly, daily_wage, weekly_hours, monthly, start_date, leave_grant, employment_status, resigned_date, created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             name,
@@ -421,6 +422,7 @@ def employee_add():
             request.form.get("emp_type", "월급제").strip(),
             to_num(request.form.get("hourly"), 0),
             to_num(request.form.get("daily_wage"), 0),
+            to_num(request.form.get("weekly_hours"), 40),
             to_num(request.form.get("monthly"), 0),
             request.form.get("start_date", "").strip(),
             to_num(request.form.get("leave_grant"), 15),
@@ -445,7 +447,7 @@ def employee_update():
     conn.execute(
         """
         UPDATE employees
-        SET name=?, department=?, position=?, emp_type=?, hourly=?, daily_wage=?, monthly=?, start_date=?, leave_grant=?
+        SET name=?, department=?, position=?, emp_type=?, hourly=?, daily_wage=?, weekly_hours=?, monthly=?, start_date=?, leave_grant=?
         WHERE id=?
         """,
         (
@@ -455,6 +457,7 @@ def employee_update():
             request.form.get("emp_type", "월급제").strip(),
             to_num(request.form.get("hourly"), 0),
             to_num(request.form.get("daily_wage"), 0),
+            to_num(request.form.get("weekly_hours"), 40),
             to_num(request.form.get("monthly"), 0),
             request.form.get("start_date", "").strip(),
             to_num(request.form.get("leave_grant"), 15),
@@ -488,7 +491,7 @@ def employee_update_inline():
         conn.execute(
             """
             UPDATE employees
-            SET name=?, department=?, position=?, emp_type=?, hourly=?, daily_wage=?, monthly=?,
+            SET name=?, department=?, position=?, emp_type=?, hourly=?, daily_wage=?, weekly_hours=?, monthly=?,
                 start_date=?, leave_grant=?, employment_status=?, resigned_date=?
             WHERE id=?
             """,
@@ -499,6 +502,7 @@ def employee_update_inline():
                 request.form.get(f"emp_type_{sid}", "월급제").strip(),
                 to_num(request.form.get(f"hourly_{sid}"), 0),
                 to_num(request.form.get(f"daily_wage_{sid}"), 0),
+                to_num(request.form.get(f"weekly_hours_{sid}"), 40),
                 to_num(request.form.get(f"monthly_{sid}"), 0),
                 request.form.get(f"start_date_{sid}", "").strip(),
                 to_num(request.form.get(f"leave_grant_{sid}"), 15),
