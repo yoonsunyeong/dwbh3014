@@ -26,6 +26,14 @@ def now_text():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def today_month():
+    return datetime.now().strftime("%Y-%m")
+
+
+def today_date():
+    return datetime.now().strftime("%Y-%m-%d")
+
+
 def to_num(text, default=0.0):
     t = (text or "").replace(",", "").strip()
     if not t:
@@ -35,6 +43,12 @@ def to_num(text, default=0.0):
 
 def money(v):
     return f"{float(v):,.0f}"
+
+
+def ensure_column(conn, table, column, col_def):
+    cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
 
 
 def init_db():
@@ -93,15 +107,32 @@ def init_db():
         )
         """
     )
+
+    ensure_column(conn, "employees", "daily_wage", "REAL DEFAULT 0")
+    ensure_column(conn, "employees", "employment_status", "TEXT DEFAULT '재직'")
+    ensure_column(conn, "employees", "resigned_date", "TEXT")
+
     conn.commit()
     conn.close()
 
 
 def list_employees():
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM employees ORDER BY id DESC").fetchall()
+    rows = conn.execute(
+        """
+        SELECT * FROM employees
+        ORDER BY CASE employment_status WHEN '재직' THEN 0 ELSE 1 END, id DESC
+        """
+    ).fetchall()
     conn.close()
     return rows
+
+
+def get_employee(employee_id):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM employees WHERE id=?", (employee_id,)).fetchone()
+    conn.close()
+    return row
 
 
 def list_payroll(month=None):
@@ -128,31 +159,54 @@ def list_payroll(month=None):
     return rows
 
 
-def leave_summary():
+def list_pay_months():
+    conn = get_conn()
+    months = [r["pay_month"] for r in conn.execute("SELECT DISTINCT pay_month FROM payroll ORDER BY pay_month DESC").fetchall()]
+    conn.close()
+    if today_month() not in months:
+        months.insert(0, today_month())
+    return months
+
+
+def list_ledger_rows(pay_month):
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT e.id, e.name, e.department, e.position, e.leave_grant,
-               COALESCE(SUM(l.days), 0) AS used_days,
-               e.leave_grant - COALESCE(SUM(l.days), 0) AS remain_days
+        SELECT
+            e.id AS employee_id,
+            e.name,
+            e.department,
+            e.position,
+            e.employment_status,
+            e.resigned_date,
+            p.id AS payroll_id,
+            p.pay_month,
+            p.base_pay,
+            p.overtime_pay,
+            p.gross,
+            p.total_deduct,
+            p.net,
+            p.created_at
         FROM employees e
-        LEFT JOIN leave_usage l ON e.id = l.employee_id
-        GROUP BY e.id, e.name, e.department, e.position, e.leave_grant
-        ORDER BY e.id DESC
-        """
+        LEFT JOIN (
+            SELECT p1.*
+            FROM payroll p1
+            JOIN (
+                SELECT employee_id, MAX(id) AS max_id
+                FROM payroll
+                WHERE pay_month=?
+                GROUP BY employee_id
+            ) m ON p1.id = m.max_id
+        ) p ON e.id = p.employee_id
+        ORDER BY CASE e.employment_status WHEN '재직' THEN 0 ELSE 1 END, e.id DESC
+        """,
+        (pay_month,),
     ).fetchall()
     conn.close()
     return rows
 
 
-def get_employee(employee_id):
-    conn = get_conn()
-    row = conn.execute("SELECT * FROM employees WHERE id=?", (employee_id,)).fetchone()
-    conn.close()
-    return row
-
-
-def get_payroll(payroll_id):
+def get_payroll_by_id(payroll_id):
     conn = get_conn()
     row = conn.execute(
         """
@@ -166,38 +220,49 @@ def get_payroll(payroll_id):
     return row
 
 
-def build_payslip_text(row):
-    if not row:
-        return ""
-    lines = [
-        "========== 임금명세서 ==========",
-        f"작성: {row['created_at']}",
-        f"급여월: {row['pay_month']}",
-        "",
-        f"성명: {row['name']}",
-        f"부서/직급: {row['department'] or '-'} / {row['position'] or '-'}",
-        f"고용형태: {row['emp_type']}",
-        "",
-        "[지급]",
-        f"기본급: {money(row['base_pay'])}",
-        f"연장수당: {money(row['overtime_pay'])}",
-        f"상여: {money(row['bonus'])}",
-        f"수당: {money(row['allowances'])}",
-        f"총지급: {money(row['gross'])}",
-        "",
-        "[공제]",
-        f"국민연금: {money(row['np'])}",
-        f"건강보험: {money(row['hi'])}",
-        f"고용보험: {money(row['ei'])}",
-        f"소득세: {money(row['it'])}",
-        f"지방소득세: {money(row['lit'])}",
-        f"기타공제: {money(row['other_deduct'])}",
-        f"총공제: {money(row['total_deduct'])}",
-        "",
-        f"실지급: {money(row['net'])}",
-        "================================",
-    ]
-    return "\n".join(lines)
+def get_latest_payroll_by_employee_month(employee_id, pay_month):
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT p.*, e.name, e.department, e.position, e.emp_type
+        FROM payroll p
+        JOIN employees e ON p.employee_id=e.id
+        WHERE p.employee_id=? AND p.pay_month=?
+        ORDER BY p.id DESC
+        LIMIT 1
+        """,
+        (employee_id, pay_month),
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def leave_summary():
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT e.id, e.name, e.department, e.position, e.leave_grant,
+               COALESCE(SUM(l.days), 0) AS used_days,
+               e.leave_grant - COALESCE(SUM(l.days), 0) AS remain_days,
+               e.employment_status
+        FROM employees e
+        LEFT JOIN leave_usage l ON e.id = l.employee_id
+        GROUP BY e.id, e.name, e.department, e.position, e.leave_grant, e.employment_status
+        ORDER BY CASE e.employment_status WHEN '재직' THEN 0 ELSE 1 END, e.id DESC
+        """
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_effective_hourly(employee):
+    hourly = to_num(employee["hourly"], 0)
+    daily = to_num(employee["daily_wage"], 0)
+    if hourly > 0:
+        return hourly
+    if daily > 0:
+        return daily / 8.0
+    return 0.0
 
 
 def calculate(employee, form):
@@ -208,12 +273,16 @@ def calculate(employee, form):
     allowances = to_num(form.get("allowances"), 0)
     other = to_num(form.get("other_deduct"), 0)
 
-    if employee["emp_type"] == "시급제":
-        base_pay = (employee["hourly"] or 0) * hours
-    else:
-        base_pay = employee["monthly"] or 0
+    effective_hourly = get_effective_hourly(employee)
+    monthly = to_num(employee["monthly"], 0)
+    emp_type = (employee["emp_type"] or "월급제").strip()
 
-    overtime_pay = (employee["hourly"] or 0) * ot_hours * ot_mul
+    if emp_type == "월급제" and monthly > 0:
+        base_pay = monthly
+    else:
+        base_pay = effective_hourly * hours
+
+    overtime_pay = effective_hourly * ot_hours * ot_mul
     gross = base_pay + overtime_pay + bonus + allowances
     np = gross * 0.045
     hi = gross * 0.03545
@@ -237,29 +306,83 @@ def calculate(employee, form):
         "total_deduct": total_deduct,
         "gross": gross,
         "net": net,
+        "effective_hourly": effective_hourly,
     }
+
+
+def build_payslip_text(row):
+    if not row:
+        return ""
+    return "\n".join(
+        [
+            "========== 임금명세서 ==========",
+            f"작성: {row['created_at']}",
+            f"급여월: {row['pay_month']}",
+            "",
+            f"성명: {row['name']}",
+            f"부서/직급: {row['department'] or '-'} / {row['position'] or '-'}",
+            f"고용형태: {row['emp_type']}",
+            "",
+            "[지급]",
+            f"기본급: {money(row['base_pay'])}",
+            f"연장수당: {money(row['overtime_pay'])}",
+            f"상여: {money(row['bonus'])}",
+            f"수당: {money(row['allowances'])}",
+            f"총지급: {money(row['gross'])}",
+            "",
+            "[공제]",
+            f"국민연금: {money(row['np'])}",
+            f"건강보험: {money(row['hi'])}",
+            f"고용보험: {money(row['ei'])}",
+            f"소득세: {money(row['it'])}",
+            f"지방소득세: {money(row['lit'])}",
+            f"기타공제: {money(row['other_deduct'])}",
+            f"총공제: {money(row['total_deduct'])}",
+            "",
+            f"실지급: {money(row['net'])}",
+            "================================",
+        ]
+    )
 
 
 @app.context_processor
 def inject_helpers():
-    return {"money": money, "today_month": datetime.now().strftime("%Y-%m"), "today_date": datetime.now().strftime("%Y-%m-%d")}
+    return {
+        "money": money,
+        "today_month": today_month(),
+        "today_date": today_date(),
+    }
 
 
 @app.get("/")
 def dashboard():
     init_db()
     tab = request.args.get("tab", "employees")
-    month = request.args.get("month", "").strip()
+    month = request.args.get("month", "").strip() or today_month()
+
     payslip_id = request.args.get("payslip_id", "").strip()
-    payslip_row = get_payroll(int(payslip_id)) if payslip_id.isdigit() else None
+    payslip_employee_id = request.args.get("payslip_employee_id", "").strip()
+    payslip_month = request.args.get("payslip_month", "").strip() or month
+
+    payslip_row = None
+    if payslip_id.isdigit():
+        payslip_row = get_payroll_by_id(int(payslip_id))
+    elif payslip_employee_id.isdigit() and payslip_month:
+        payslip_row = get_latest_payroll_by_employee_month(int(payslip_employee_id), payslip_month)
+
+    employees = list_employees()
     return render_template(
         "dashboard.html",
         active_tab=tab,
-        employees=list_employees(),
-        payroll_rows=list_payroll(month or None),
+        employees=employees,
+        payroll_rows=list_payroll(month),
+        ledger_rows=list_ledger_rows(month),
         leave_rows=leave_summary(),
         month_filter=month,
+        pay_months=list_pay_months(),
         payslip_id=payslip_id,
+        payslip_employee_id=payslip_employee_id,
+        payslip_month=payslip_month,
         payslip_text=build_payslip_text(payslip_row),
         payroll_preview=None,
         payroll_form={},
@@ -272,11 +395,13 @@ def employee_add():
     if not name:
         flash("성명을 입력해주세요.", "error")
         return redirect(url_for("dashboard", tab="employees"))
+
     conn = get_conn()
     conn.execute(
         """
-        INSERT INTO employees(name, department, position, emp_type, hourly, monthly, start_date, leave_grant, created_at)
-        VALUES(?,?,?,?,?,?,?,?,?)
+        INSERT INTO employees
+        (name, department, position, emp_type, hourly, daily_wage, monthly, start_date, leave_grant, employment_status, resigned_date, created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             name,
@@ -284,9 +409,12 @@ def employee_add():
             request.form.get("position", "").strip(),
             request.form.get("emp_type", "월급제").strip(),
             to_num(request.form.get("hourly"), 0),
+            to_num(request.form.get("daily_wage"), 0),
             to_num(request.form.get("monthly"), 0),
             request.form.get("start_date", "").strip(),
             to_num(request.form.get("leave_grant"), 15),
+            "재직",
+            "",
             now_text(),
         ),
     )
@@ -306,7 +434,7 @@ def employee_update():
     conn.execute(
         """
         UPDATE employees
-        SET name=?, department=?, position=?, emp_type=?, hourly=?, monthly=?, start_date=?, leave_grant=?
+        SET name=?, department=?, position=?, emp_type=?, hourly=?, daily_wage=?, monthly=?, start_date=?, leave_grant=?
         WHERE id=?
         """,
         (
@@ -315,6 +443,7 @@ def employee_update():
             request.form.get("position", "").strip(),
             request.form.get("emp_type", "월급제").strip(),
             to_num(request.form.get("hourly"), 0),
+            to_num(request.form.get("daily_wage"), 0),
             to_num(request.form.get("monthly"), 0),
             request.form.get("start_date", "").strip(),
             to_num(request.form.get("leave_grant"), 15),
@@ -324,6 +453,41 @@ def employee_update():
     conn.commit()
     conn.close()
     flash("근로자 정보를 수정했습니다.", "ok")
+    return redirect(url_for("dashboard", tab="employees"))
+
+
+@app.post("/employee/retire")
+def employee_retire():
+    employee_id = request.form.get("employee_id", "").strip()
+    resigned_date = request.form.get("resigned_date", "").strip() or today_date()
+    if not employee_id.isdigit():
+        flash("퇴사 처리할 근로자 ID를 입력해주세요.", "error")
+        return redirect(url_for("dashboard", tab="employees"))
+    conn = get_conn()
+    conn.execute(
+        "UPDATE employees SET employment_status='퇴사', resigned_date=? WHERE id=?",
+        (resigned_date, int(employee_id)),
+    )
+    conn.commit()
+    conn.close()
+    flash("퇴사 처리했습니다.", "ok")
+    return redirect(url_for("dashboard", tab="employees"))
+
+
+@app.post("/employee/reactivate")
+def employee_reactivate():
+    employee_id = request.form.get("employee_id", "").strip()
+    if not employee_id.isdigit():
+        flash("재직 전환할 근로자 ID를 입력해주세요.", "error")
+        return redirect(url_for("dashboard", tab="employees"))
+    conn = get_conn()
+    conn.execute(
+        "UPDATE employees SET employment_status='재직', resigned_date='' WHERE id=?",
+        (int(employee_id),),
+    )
+    conn.commit()
+    conn.close()
+    flash("재직 상태로 변경했습니다.", "ok")
     return redirect(url_for("dashboard", tab="employees"))
 
 
@@ -344,6 +508,26 @@ def employee_delete():
     return redirect(url_for("dashboard", tab="employees"))
 
 
+def build_dashboard_context_for_payroll(form, preview):
+    month = form.get("pay_month", today_month()).strip() or today_month()
+    employees = list_employees()
+    return {
+        "active_tab": "payroll",
+        "employees": employees,
+        "payroll_rows": list_payroll(month),
+        "ledger_rows": list_ledger_rows(month),
+        "leave_rows": leave_summary(),
+        "month_filter": month,
+        "pay_months": list_pay_months(),
+        "payslip_id": "",
+        "payslip_employee_id": "",
+        "payslip_month": month,
+        "payslip_text": "",
+        "payroll_preview": preview,
+        "payroll_form": dict(form),
+    }
+
+
 @app.post("/payroll/calculate")
 def payroll_calculate():
     employee_id = request.form.get("employee_id", "").strip()
@@ -355,18 +539,7 @@ def payroll_calculate():
         flash("근로자를 찾을 수 없습니다.", "error")
         return redirect(url_for("dashboard", tab="payroll"))
     preview = calculate(employee, request.form)
-    return render_template(
-        "dashboard.html",
-        active_tab="payroll",
-        employees=list_employees(),
-        payroll_rows=list_payroll(None),
-        leave_rows=leave_summary(),
-        month_filter="",
-        payslip_id="",
-        payslip_text="",
-        payroll_preview=preview,
-        payroll_form=request.form,
-    )
+    return render_template("dashboard.html", **build_dashboard_context_for_payroll(request.form, preview))
 
 
 @app.post("/payroll/save")
@@ -381,6 +554,7 @@ def payroll_save():
         flash("근로자를 찾을 수 없습니다.", "error")
         return redirect(url_for("dashboard", tab="payroll"))
     calc = calculate(employee, request.form)
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
@@ -411,39 +585,38 @@ def payroll_save():
     conn.commit()
     payroll_id = cur.lastrowid
     conn.close()
+
     flash(f"급여 데이터를 저장했습니다. ID: {payroll_id}", "ok")
-    return redirect(url_for("dashboard", tab="ledger", payslip_id=payroll_id))
+    return redirect(url_for("dashboard", tab="ledger", month=pay_month, payslip_id=payroll_id))
 
 
 @app.get("/ledger/export")
 def ledger_export():
-    month = request.args.get("month", "").strip()
-    rows = list_payroll(month or None)
+    month = request.args.get("month", "").strip() or today_month()
+    rows = list_ledger_rows(month)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
-        ["ID", "급여월", "성명", "부서", "직급", "기본급", "연장수당", "상여", "수당", "총지급", "총공제", "실지급", "등록시각"]
+        ["직원ID", "성명", "상태", "급여월", "기본급", "연장수당", "총지급", "총공제", "실지급", "작성상태", "등록시각"]
     )
     for r in rows:
         writer.writerow(
             [
-                r["id"],
-                r["pay_month"],
+                r["employee_id"],
                 r["name"],
-                r["department"] or "",
-                r["position"] or "",
-                r["base_pay"],
-                r["overtime_pay"],
-                r["bonus"],
-                r["allowances"],
-                r["gross"],
-                r["total_deduct"],
-                r["net"],
-                r["created_at"],
+                r["employment_status"],
+                month,
+                r["base_pay"] or 0,
+                r["overtime_pay"] or 0,
+                r["gross"] or 0,
+                r["total_deduct"] or 0,
+                r["net"] or 0,
+                "작성완료" if r["payroll_id"] else "미작성",
+                r["created_at"] or "",
             ]
         )
     mem = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-    filename = f"ledger_{month or 'all'}.csv"
+    filename = f"ledger_{month}.csv"
     return send_file(mem, as_attachment=True, download_name=filename, mimetype="text/csv")
 
 
