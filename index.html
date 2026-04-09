@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>사업장 인사/급여 관리 미리보기</title>
+  <style>
+    body { font-family: "Segoe UI", sans-serif; margin: 0; background: #f4f7fb; color: #1b2733; }
+    .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #d6dee8; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    h1 { margin: 0 0 10px; }
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .tab { padding: 10px 14px; border-radius: 10px; background: #eaf1fb; border: 1px solid #d6dee8; font-weight: 600; }
+    .tab.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+    .note { color: #4d5b6a; line-height: 1.55; }
+    a.btn { display: inline-block; background: #1f6feb; color: #fff; padding: 10px 14px; border-radius: 8px; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>사업장 인사/급여 통합 관리</h1>
+    <div class="tabs">
+      <div class="tab active">근로자 관리</div>
+      <div class="tab">급여 계산/등록</div>
+      <div class="tab">임금대장</div>
+      <div class="tab">임금명세서</div>
+      <div class="tab">연차관리</div>
+    </div>
+    <div class="card">
+      <p class="note">
+        Vercel에서는 데스크톱 앱(`tkinter`)을 직접 실행할 수 없어서,
+        현재는 웹 미리보기 페이지를 기본 화면으로 제공합니다.
+      </p>
+      <p class="note">
+        실제 데스크톱 프로그램은 저장소의 <code>hr_payroll_app.py</code> 파일을
+        PC에서 Python으로 실행해서 사용합니다.
+      </p>
+      <a class="btn" href="./ui_preview.html">상세 미리보기 열기</a>
+    </div>
+  </div>
+</body>
+</html>
