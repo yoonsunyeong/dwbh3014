@@ -1,0 +1,73 @@
+﻿<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>인사/급여 관리 화면 미리보기</title>
+<style>
+:root{--bg:#f4f7fb;--card:#fff;--line:#d6dee8;--text:#1b2733;--accent:#1f6feb}
+*{box-sizing:border-box} body{margin:0;font-family:'Segoe UI',sans-serif;background:var(--bg);color:var(--text)}
+.wrap{max-width:1200px;margin:20px auto;padding:0 14px}
+.h{font-size:24px;font-weight:700;margin:0 0 10px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.tab{padding:10px 14px;border:1px solid var(--line);background:#eaf1fb;border-radius:10px;font-weight:600}
+.tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:10px}
+label{font-size:13px;color:#4d5b6a}
+input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.btns{margin-top:10px;display:flex;gap:8px}
+button{padding:9px 12px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
+.table{width:100%;border-collapse:collapse;font-size:14px}
+.table th,.table td{border:1px solid var(--line);padding:8px;text-align:center}
+.table th{background:#f0f5fb}
+.area{background:#0f1720;color:#dbe8f6;border-radius:10px;padding:12px;min-height:180px;white-space:pre-line}
+.note{font-size:13px;color:#5a6a7a}
+@media (max-width:900px){.grid{grid-template-columns:repeat(2,minmax(120px,1fr));}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 class="h">사업장 인사/급여 통합 관리 (미리보기)</h1>
+  <div class="tabs">
+    <div class="tab active">근로자 관리</div><div class="tab">급여 계산/등록</div><div class="tab">임금대장</div><div class="tab">임금명세서</div><div class="tab">연차관리</div>
+  </div>
+
+  <div class="card">
+    <h3>근로자 정보 입력/수정</h3>
+    <div class="grid">
+      <div><label>성명</label><input value="홍길동"></div>
+      <div><label>부서</label><input value="생산팀"></div>
+      <div><label>직급</label><input value="사원"></div>
+      <div><label>고용형태</label><select><option>월급제</option><option>시급제</option></select></div>
+      <div><label>시급</label><input value="10030"></div>
+      <div><label>월급</label><input value="2600000"></div>
+      <div><label>입사일</label><input value="2026-01-10"></div>
+      <div><label>연차부여일수</label><input value="15"></div>
+    </div>
+    <div class="btns"><button>신규 등록</button><button>선택 수정</button><button>선택 삭제</button></div>
+  </div>
+
+  <div class="card">
+    <h3>근로자 목록</h3>
+    <table class="table">
+      <tr><th>ID</th><th>성명</th><th>부서</th><th>직급</th><th>고용형태</th><th>시급</th><th>월급</th><th>입사일</th><th>연차부여</th></tr>
+      <tr><td>1</td><td>홍길동</td><td>생산팀</td><td>사원</td><td>월급제</td><td>10,030</td><td>2,600,000</td><td>2026-01-10</td><td>15.0</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>급여 계산 결과 예시</h3>
+    <div class="area">[급여 계산 결과] 2026-04
+근로자: 홍길동 (생산팀 / 사원)
+- 기본급: 2,600,000 원
+- 연장근로수당: 150,450 원
+- 총지급액: 2,750,450 원
+- 총공제액: 341,612 원
+=> 실지급액: 2,408,838 원</div>
+  </div>
+
+  <p class="note">이 화면은 실제 앱 구조를 보여주는 미리보기입니다. 실제 기능 실행은 <code>hr_payroll_app.py</code>에서 동작합니다.</p>
+</div>
+</body>
+</html>
